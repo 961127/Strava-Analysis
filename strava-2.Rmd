@@ -1,0 +1,108 @@
+dat <- getURL("https://www.strava.com/api/v3/activities/645234234",httpheader = c("Authorization"="Bearer 254266fe9018df65fd024c0a2016045a73ebb8ef"))
+
+sp <- strsplit(
+  getURL("https://www.strava.com/api/v3/activities/645234424",
+  httpheader = c("Authorization"="Bearer 254266fe9018df65fd024c0a2016045a73ebb8ef")),
+  split = "\"")[[1]]
+
+info <- data.frame(
+  "activity-id"=rep(0,100),
+  "athlete-id"=rep(1,100),
+  "sex"=rep(0,100),
+  "type"=rep(0,100),
+  "dis"=rep(0,100),
+  "time"=rep(0,100),
+  "max-speed"=rep(0,100)
+)
+
+for(i in 1:5000)
+{
+  sp <- strsplit(
+    getURL(
+      paste("https://www.strava.com/api/v3/activities/",10*i+645234427,sep = ""),
+      httpheader = c("Authorization"="Bearer 254266fe9018df65fd024c0a2016045a73ebb8ef")),
+      split = "\"")[[1]]
+  if(length(sp)>100)
+  {info[i,] <- sp[
+    c(3,which(sp=="athlete")+3,
+      which(sp=="sex")+2,
+      which(sp=="type")+2,
+      which(sp=="distance")+1,
+      which(sp=="moving_time")+1,
+      which(sp=="max_speed")+1)]
+  }
+}
+
+
+
+dat2 <- info[which((!is.na(info[,1]))&info[,1]!=0 &info[,3]!="premium" & substring(info[,4],1,1)=="R" & substring(info[,4],2,2)!="o"),]
+for(i in 1:7){dat2[,i] <- gsub(":","",dat2[,i],fixed = T);dat2[,i] <- gsub(",","",dat2[,i],fixed = T)}
+
+gender <- data.frame(rep(0,4265),rep(0,4265))
+for(i in 1:4265){if(dat2$sex[i]=="F"){gender[i,1]=1} else{gender[i,2]=1}}
+type <- data.frame(rep(0,4265),rep(0,4265))
+for(i in 1:4265){if(dat2$type[i]=="Ride"){type[i,1]=1}; if(dat2$type[i]=="Run"){type[i,2]=1}}
+
+
+data <- data.frame("gender" = dat2$sex, "gender_f" = gender[,1], "gender_m" = gender[,2], "type" = dat2$type, "type_ride" = type[,1], "type_run" = type[,2], "dis" = as.numeric(dat2[,5]), "time" = as.numeric(dat2[,6]),"max.speed" = as.numeric(dat2[,7]))
+
+data_train <- data[1:2000,]
+data_test <- data[2001:4265,]
+
+
+
+#Fisher
+library(MASS)
+ld <- lda(gender~type_ride+type_run+dis+time+max.speed,data=data_train)
+fisher <- predict(ld,data_test)
+gender_predict <- fisher$class
+fisher_data <- cbind(data_test,gender_predict)
+
+length(which(fisher_data$gender=="M"&fisher_data$gender_predict=="M"))
+length(which(fisher_data$gender=="M"&fisher_data$gender_predict=="F"))
+length(which(fisher_data$gender=="F"&fisher_data$gender_predict=="F"))
+length(which(fisher_data$gender=="F"&fisher_data$gender_predict=="M"))
+
+
+#svm
+library(e1071)
+gender_svm <- svm(gender~type_ride+type_run+dis+time+max.speed,kernel = "polynomial",degree = 2,tolerance = 0.1,class.weights = c("M"=1,"F"=9.41),data=data_train)
+svm_data <- cbind(data_test,"gender_svm"=predict(gender_svm,data_test))
+length(which(svm_data$gender=="M"&svm_data$gender_svm=="M"))
+length(which(svm_data$gender=="M"&svm_data$gender_svm=="F"))
+length(which(svm_data$gender=="F"&svm_data$gender_svm=="F"))
+length(which(svm_data$gender=="F"&svm_data$gender_svm=="M"))
+
+2237933
+#BP 1
+library("AMORE")
+set.seed(22379951)
+net <- newff(n.neurons = c(5,5,2),learning.rate.global = 12.4*1e-10,momentum.global=0.01,error.criterium="TAO", Stao=NA, hidden.layer="purelin",method="ADAPTgdwm")
+bp_output <- data_train[,c(2,3)]
+bp_result <- train(net,data_train[,c(5:9)],bp_output,error.criterium="LMS", report=F, show.step=300, n.shows=5)
+z <- sim(bp_result$net,data_test[,c(5:9)])
+
+gender_bp <- rep("M",2265)
+for(i in 1:2265){if(z[i,1]>z[i,2]){gender_bp[i]="F"} else{gender_bp[i]="M"}}
+bp_data <- cbind(data_test,gender_bp)
+length(which(bp_data$gender=="M"&bp_data$gender_bp=="M"))
+length(which(bp_data$gender=="M"&bp_data$gender_bp=="F"))
+length(which(bp_data$gender=="F"&bp_data$gender_bp=="F"))
+length(which(bp_data$gender=="F"&bp_data$gender_bp=="M"))
+
+
+#logistic
+logistic <- glm(gender_f~type_ride+type_run+dis+time+max.speed,data=data_train,family = binomial())
+logistic_result <- predict(logistic,newdata = data_test, type = "response")
+logistic_gender <- round(2*logistic_result)
+logistic_data <- cbind(data_test,"gender_logistic" = logistic_gender)
+length(which(logistic_data$gender_f==0&logistic_data$gender_logistic==0))
+length(which(logistic_data$gender_f==0&logistic_data$gender_logistic==1))
+length(which(logistic_data$gender_f==1&logistic_data$gender_logistic==0))
+length(which(logistic_data$gender_f==1&logistic_data$gender_logistic==1))
+
+
+ggplot(data[which(data$max.speed<40),],aes(x=type, y=max.speed,fill = gender))+geom_boxplot()+labs(x="type",y="max speed (km/h)",title="Figure 2")
+
+ggplot(data,aes(x=dis, y=time,color = gender))+geom_point(alpha=0.5,size=2)+labs(x="Distance (m)",y="Time (s)",title="Figure 1")
+
